@@ -52,6 +52,22 @@ var headerHandler = function (value, req, res) {
 	var etag = '"' + value + '"';
 	res.set('ETag', etag);
 
+	var relTypes;
+	if(req.query.types) {
+		relTypes = {};
+		var parts = req.query.types.split(',');
+		for(var i = 0; i < parts.length; ++i) {
+			relTypes[parts[i].trim()] = 1;
+		}
+	} else {
+		relTypes = {
+			'changes': 1,
+			'value-stream': 1,
+			'changes-stream': 1,
+			'hint-stream': 1
+		};
+	}
+
 	var allowHeaders = ['If-None-Match', 'Wait'];
 	var exposeHeaders = [];
 	exposeHeaders.push('ETag');
@@ -65,10 +81,18 @@ var headerHandler = function (value, req, res) {
 	}
 
 	var links = [];
-	links.push('</test?after=' + value + '>; rel=changes');
-	links.push('</test>; rel=value-stream');
-	links.push('</test?changes>; rel=changes-stream');
-	links.push('</test?hints>; rel=hint-stream');
+	if('changes' in relTypes) {
+		links.push('</test?after=' + value + '>; rel=changes');
+	}
+	if('value-stream' in relTypes) {
+		links.push('</test>; rel=value-stream');
+	}
+	if('changes-stream' in relTypes) {
+		links.push('</test?changes>; rel=changes-stream');
+	}
+	if('hint-stream' in relTypes) {
+		links.push('</test?hints>; rel=hint-stream');
+	}
 
 	if(links.length > 0) {
 		res.set('Link', links.join(', '));

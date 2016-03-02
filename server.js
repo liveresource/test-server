@@ -20,16 +20,24 @@ var listeners = [];
 //   responseStatus: response status code if wait times out
 //   timeout: int
 var newListener = function (options) {
-	var l = {req: options.req, res: options.res, type: options.type, stream: options.stream};
+	var l = {
+		req: options.req,
+		res: options.res,
+		type: options.type,
+		stream: options.stream,
+		reliable: options.reliable
+	};
 	listeners.push(l);
 	options.req.on('close', function () {
 		l.destroy();
 	});
-	l.timer = setTimeout(function () {
-		l.timer = null;
-		l.res.status(options.responseStatus || 200).send(options.response || '');
-		l.destroy();
-	}, options.wait * 1000);
+	if(options.wait) {
+		l.timer = setTimeout(function () {
+			l.timer = null;
+			l.res.status(options.responseStatus || 200).send(options.response || '');
+			l.destroy();
+		}, options.wait * 1000);
+	}
 	if(options.timeout) {
 		l.timeoutTimer = setTimeout(function () {
 			l.timeoutTimer = null;
@@ -65,19 +73,37 @@ setInterval(function () {
 	if(timeValue != old) {
 		for(var i = 0; i < listeners.length; ++i) {
 			var l = listeners[i];
+
+			// drop messages to simulate unreliability
+			if(!l.reliable && timeValue % 30 == 0) {
+				continue;
+			}
+
 			if(l.type == 'hint') {
 				l.res.write('event: update\ndata:\n\n');
 			} else if(l.type == 'changes') {
+				var links = [];
+				if(l.reliable) {
+					links.push('</test?reliable&after=' + timeValue + '>; rel=changes-stream');
+				} else {
+					links.push('</test?after=' + timeValue + '>; rel=changes');
+				}
 				var meta = {
 					'Content-Type': 'application/json',
-					'Changes-Id': '' + timeValue,
-					'Previous-Changes-Id': '' + old
+					'Link': links.join(', ')
 				};
+				if(!l.reliable) {
+					meta['Changes-Id'] = '' + timeValue;
+					meta['Previous-Changes-Id'] = '' + old;
+				}
 				var valueStr = JSON.stringify({'time:change': '+' + (timeValue - old)});
 				if(l.stream) {
-					l.res.write('event: update\n' +
-						'data: ' + JSON.stringify(meta) + '\n' +
-						'data: ' + valueStr + '\n\n');
+					var s = 'event: update\n';
+					if(l.reliable) {
+						s += 'id: ' + timeValue + '\n';
+					}
+					s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
+					l.res.write(s);
 				} else {
 					l.res.set(meta);
 					l.res.send(valueStr + '\n');
@@ -87,13 +113,18 @@ setInterval(function () {
 				var meta = {
 					'Content-Type': 'application/json',
 					'ETag': '"' + timeValue + '"',
-					'Previous-ETag': '"' + old + '"'
 				};
+				if(!l.reliable) {
+					meta['Previous-ETag'] = '"' + old + '"';
+				}
 				var valueStr = JSON.stringify({time: timeValue});
 				if(l.stream) {
-					l.res.write('event: update\n' +
-						'data: ' + JSON.stringify(meta) + '\n' +
-						'data: ' + valueStr + '\n\n');
+					var s = 'event: update\n';
+					if(l.reliable) {
+						s += 'id: ' + timeValue + '\n';
+					}
+					s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
+					l.res.write(s);
 				} else {
 					l.res.set(meta);
 					l.res.send(valueStr + '\n');
@@ -108,7 +139,7 @@ var getTime = function () {
 	return timeValue;
 };
 
-var headerHandler = function (value, req, res) {
+var headerHandler = function (value, reliable, req, res) {
 	var etag = '"' + value + '"';
 	res.set('ETag', etag);
 
@@ -153,10 +184,18 @@ var headerHandler = function (value, req, res) {
 		links.push('</test?after=' + value + '>; rel=changes-wait');
 	}
 	if('value-stream' in relTypes) {
-		links.push('</test>; rel=value-stream');
+		if(reliable) {
+			links.push('</test?reliable>; rel=value-stream; mode=reliable');
+		} else {
+			links.push('</test>; rel=value-stream');
+		}
 	}
 	if('changes-stream' in relTypes) {
-		links.push('</test?changes>; rel=changes-stream');
+		if(reliable) {
+			links.push('</test?reliable&after=' + value + '>; rel=changes-stream; mode=reliable');
+		} else {
+			links.push('</test?changes>; rel=changes-stream');
+		}
 	}
 	if('hint-stream' in relTypes) {
 		links.push('</test?hints>; rel=hint-stream');
@@ -190,13 +229,42 @@ app.head('/test', function (req, res) {
 
 app.get('/test', function (req, res) {
 	var value = getTime();
-	var etag = headerHandler(value, req, res);
+
+	var reliable = false;
+	if('reliable' in req.query) {
+		reliable = true;
+	}
+
+	var etag = headerHandler(value, reliable, req, res);
 
 	var timeout = null;
 	if('timeout' in req.query) {
 		timeout = parseInt(req.query.timeout);
 		if(isNaN(timeout) || timeout < 0) {
 			res.status(400).send('Invalid \'timeout\' value.\n');
+			return;
+		}
+	}
+
+	var after = null;
+	if('after' in req.query) {
+		after = parseInt(req.query.after);
+		if(isNaN(after)) {
+			res.status(400).send('Invalid \'after\' value.\n');
+			return;
+		}
+		if(after > value) {
+			// went back in time? tell the client to start over
+			res.status(404).end('Invalid changes URI, start over.\n');
+			return;
+		}
+	}
+
+	var lastEventId = req.get('Last-Event-ID');
+	if(lastEventId) {
+		lastEventId = parseInt(lastEventId);
+		if(isNaN(lastEventId) || lastEventId < 0) {
+			res.status(400).send('Invalid \'Last-Event-ID\' value.\n');
 			return;
 		}
 	}
@@ -215,13 +283,23 @@ app.get('/test', function (req, res) {
 	}
 
 	if(sse) {
+		// Last-Event-ID supersedes 'after' query param
+		if(lastEventId) {
+			after = lastEventId;
+		}
+
 		var type;
 		if('hints' in req.query) {
 			type = 'hint';
-		} else if('changes' in req.query) {
+		} else if(after != null || 'changes' in req.query) {
 			type = 'changes';
 		} else {
 			type = 'value';
+		}
+
+		if(type == 'changes' && reliable && after == null) {
+			res.status(400).send('Reliable changes stream requires \'after\' parameter or \'Last-Event-ID\' header.\n');
+			return;
 		}
 
 		newListener({
@@ -229,11 +307,42 @@ app.get('/test', function (req, res) {
 			res: res,
 			type: type,
 			stream: true,
-			timeout: timeout
+			timeout: timeout,
+			reliable: reliable
 		});
 
 		res.set('Content-Type', 'text/event-stream');
 		res.write('event: open\ndata:\n\n');
+
+		if(reliable) {
+			// write initial data
+			if(type == 'changes') {
+				if(value - after > 0) {
+					var links = [];
+					links.push('</test?reliable&after=' + value + '>; rel=changes-stream');
+					var meta = {
+						'Content-Type': 'application/json',
+						'Link': links.join(', ')
+					};
+					var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
+					res.write('event: update\n' +
+						'id: ' + value + '\n' +
+						'data: ' + JSON.stringify(meta) + '\n' +
+						'data: ' + valueStr + '\n\n');
+				}
+			} else if(type == 'value') {
+				var meta = {
+					'Content-Type': 'application/json',
+					'ETag': '"' + timeValue + '"'
+				};
+				var valueStr = JSON.stringify({time: timeValue});
+				res.write('event: update\n' +
+					'id: ' + value + '\n' +
+					'data: ' + JSON.stringify(meta) + '\n' +
+					'data: ' + valueStr + '\n\n');
+			}
+		}
+
 		return;
 	}
 
@@ -248,18 +357,7 @@ app.get('/test', function (req, res) {
 		wait = 0;
 	}
 
-	if('after' in req.query) {
-		var after = parseInt(req.query.after);
-		if(isNaN(after)) {
-			res.status(400).send('Invalid \'after\' value.\n');
-			return;
-		}
-		if(after > value) {
-			// went back in time? tell the client to start over
-			res.status(404).end('Invalid changes URI, start over.\n');
-			return;
-		}
-
+	if(after != null) {
 		var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
 
 		if(value - after == 0 && wait) {

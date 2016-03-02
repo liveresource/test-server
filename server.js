@@ -168,7 +168,7 @@ var headerHandler = function (value, reliable, req, res) {
 	exposeHeaders.push('Changes-Id');
 	exposeHeaders.push('Previous-Changes-Id');
 
-	if('no_poll_header' in req.query) {
+	if(!('no_poll_header' in req.query)) {
 		res.set('X-Poll-Interval', '10');
 		exposeHeaders.push('X-Poll-Interval');
 	}

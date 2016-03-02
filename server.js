@@ -10,7 +10,50 @@ var server = app.listen(process.env.PORT || 3000, function () {
 
 var listeners = [];
 
-var timeValue = 0;
+// options:
+//   req: request object
+//   res: response object
+//   type: value|changes|hint
+//   stream: bool
+//   wait: int
+//   response: response body if wait times out
+//   responseStatus: response status code if wait times out
+//   timeout: int
+var newListener = function (options) {
+	var l = {req: options.req, res: options.res, type: options.type, stream: options.stream};
+	listeners.push(l);
+	options.req.on('close', function () {
+		l.destroy();
+	});
+	l.timer = setTimeout(function () {
+		l.timer = null;
+		l.res.status(options.responseStatus || 200).send(options.response || '');
+		l.destroy();
+	}, options.wait * 1000);
+	if(options.timeout) {
+		l.timeoutTimer = setTimeout(function () {
+			l.timeoutTimer = null;
+			l.res.socket.destroy();
+			l.destroy();
+		}, options.timeout * 1000);
+	}
+	l.destroy = function () {
+		if(l.timer) {
+			clearTimeout(l.timer);
+			l.timer = null;
+		}
+		if(l.timeoutTimer) {
+			clearTimeout(l.timeoutTimer);
+			l.timeoutTimer = null;
+		}
+		var i = listeners.indexOf(l);
+		listeners.splice(i, 1);
+	};
+
+	return l;
+}
+
+var timeValue = Math.floor(Date.now() / 1000);
 
 setInterval(function () {
 	var old = timeValue;
@@ -149,6 +192,15 @@ app.get('/test', function (req, res) {
 	var value = getTime();
 	var etag = headerHandler(value, req, res);
 
+	var timeout = null;
+	if('timeout' in req.query) {
+		timeout = parseInt(req.query.timeout);
+		if(isNaN(timeout) || timeout < 0) {
+			res.status(400).send('Invalid \'timeout\' value.\n');
+			return;
+		}
+	}
+
 	var sse = false;
 	var accept = req.get('Accept');
 	if(accept) {
@@ -172,15 +224,13 @@ app.get('/test', function (req, res) {
 			type = 'value';
 		}
 
-		var l = {type: type, stream: true, res: res};
-		listeners.push(l);
-		req.on('close', function () {
-			l.destroy();
+		newListener({
+			req: req,
+			res: res,
+			type: type,
+			stream: true,
+			timeout: timeout
 		});
-		l.destroy = function () {
-			var i = listeners.indexOf(l);
-			listeners.splice(i, 1);
-		};
 
 		res.set('Content-Type', 'text/event-stream');
 		res.write('event: open\ndata:\n\n');
@@ -190,12 +240,9 @@ app.get('/test', function (req, res) {
 	var wait = req.get('Wait');
 	if(wait) {
 		wait = parseInt(wait);
-		if(isNaN(wait)) {
-			res.status(400).send('Invalid \'Wait\' value\n');
+		if(isNaN(wait) || wait < 0) {
+			res.status(400).send('Invalid \'Wait\' value.\n');
 			return;
-		}
-		if(wait < 0) {
-			wait = 0;
 		}
 	} else {
 		wait = 0;
@@ -204,34 +251,27 @@ app.get('/test', function (req, res) {
 	if('after' in req.query) {
 		var after = parseInt(req.query.after);
 		if(isNaN(after)) {
-			res.status(400).send('Invalid \'after\' value\n');
+			res.status(400).send('Invalid \'after\' value.\n');
 			return;
 		}
 		if(after > value) {
 			// went back in time? tell the client to start over
-			res.status(404).end();
+			res.status(404).end('Invalid changes URI, start over.\n');
 			return;
 		}
 
 		var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
 
 		if(value - after == 0 && wait) {
-			var l = {type: 'changes', stream: false, res: res};
-			listeners.push(l);
-			req.on('close', function () {
-				l.destroy();
+			newListener({
+				req: req,
+				res: res,
+				type: 'changes',
+				stream: false,
+				wait: wait,
+				response: valueStr + '\n',
+				timeout: timeout
 			});
-			l.timer = setTimeout(function () {
-				res.send(valueStr + '\n');
-				l.destroy();
-			}, wait * 1000);
-			l.destroy = function () {
-				if(l.timer) {
-					clearTimeout(l.timer);
-				}
-				var i = listeners.indexOf(l);
-				listeners.splice(i, 1);
-			};
 			return;
 		}
 
@@ -240,22 +280,15 @@ app.get('/test', function (req, res) {
 		var inm = req.get('If-None-Match');
 		if(inm == etag) {
 			if(wait) {
-				var l = {type: 'value', stream: false, res: res};
-				listeners.push(l);
-				req.on('close', function () {
-					l.destroy();
+				newListener({
+					req: req,
+					res: res,
+					type: 'value',
+					stream: false,
+					wait: wait,
+					responseStatus: 304,
+					timeout: timeout
 				});
-				l.timer = setTimeout(function () {
-					res.status(304).end();
-					l.destroy();
-				}, wait * 1000);
-				l.destroy = function () {
-					if(l.timer) {
-						clearTimeout(l.timer);
-					}
-					var i = listeners.indexOf(l);
-					listeners.splice(i, 1);
-				};
 				return;
 			}
 

@@ -14,7 +14,10 @@ var timeValue = 0;
 
 setInterval(function () {
 	var old = timeValue;
-	timeValue = Math.floor(Date.now() / 1000);
+	var cur = Math.floor(Date.now() / 1000);
+	if(cur % 10 == 0) {
+		timeValue = cur;
+	}
 
 	if(timeValue != old) {
 		for(var i = 0; i < listeners.length; ++i) {
@@ -27,18 +30,32 @@ setInterval(function () {
 					'Changes-Id': '' + timeValue,
 					'Previous-Changes-Id': '' + old
 				};
-				l.res.write('event: update\n' +
-					'data: ' + JSON.stringify(meta) + '\n' +
-					'data: ' + JSON.stringify({'time:change': '+' + (timeValue - old)}) + '\n\n');
+				var valueStr = JSON.stringify({'time:change': '+' + (timeValue - old)});
+				if(l.stream) {
+					l.res.write('event: update\n' +
+						'data: ' + JSON.stringify(meta) + '\n' +
+						'data: ' + valueStr + '\n\n');
+				} else {
+					l.res.set(meta);
+					l.res.send(valueStr + '\n');
+					l.destroy();
+				}
 			} else {
 				var meta = {
 					'Content-Type': 'application/json',
 					'ETag': '"' + timeValue + '"',
 					'Previous-ETag': '"' + old + '"'
 				};
-				l.res.write('event: update\n' +
-					'data: ' + JSON.stringify(meta) + '\n' +
-					'data: ' + JSON.stringify({time: timeValue}) + '\n\n');
+				var valueStr = JSON.stringify({time: timeValue});
+				if(l.stream) {
+					l.res.write('event: update\n' +
+						'data: ' + JSON.stringify(meta) + '\n' +
+						'data: ' + valueStr + '\n\n');
+				} else {
+					l.res.set(meta);
+					l.res.send(valueStr + '\n');
+					l.destroy();
+				}
 			}
 		}
 	}
@@ -62,7 +79,9 @@ var headerHandler = function (value, req, res) {
 	} else {
 		relTypes = {
 			'changes': 1,
+			'value-wait': 1,
 			'value-stream': 1,
+			'changes-wait': 1,
 			'changes-stream': 1,
 			'hint-stream': 1
 		};
@@ -83,6 +102,12 @@ var headerHandler = function (value, req, res) {
 	var links = [];
 	if('changes' in relTypes) {
 		links.push('</test?after=' + value + '>; rel=changes');
+	}
+	if('value-wait' in relTypes) {
+		links.push('</test>; rel=value-wait');
+	}
+	if('changes-wait' in relTypes) {
+		links.push('</test?after=' + value + '>; rel=changes-wait');
 	}
 	if('value-stream' in relTypes) {
 		links.push('</test>; rel=value-stream');
@@ -147,29 +172,93 @@ app.get('/test', function (req, res) {
 			type = 'value';
 		}
 
-		var l = {type: type, res: res};
+		var l = {type: type, stream: true, res: res};
 		listeners.push(l);
 		req.on('close', function () {
+			l.destroy();
+		});
+		l.destroy = function () {
 			var i = listeners.indexOf(l);
 			listeners.splice(i, 1);
-		});
+		};
 
 		res.set('Content-Type', 'text/event-stream');
 		res.write('event: open\ndata:\n\n');
 		return;
 	}
 
+	var wait = req.get('Wait');
+	if(wait) {
+		wait = parseInt(wait);
+		if(isNaN(wait)) {
+			res.status(400).send('Invalid \'Wait\' value\n');
+			return;
+		}
+		if(wait < 0) {
+			wait = 0;
+		}
+	} else {
+		wait = 0;
+	}
+
 	if('after' in req.query) {
 		var after = parseInt(req.query.after);
+		if(isNaN(after)) {
+			res.status(400).send('Invalid \'after\' value\n');
+			return;
+		}
 		if(after > value) {
 			// went back in time? tell the client to start over
 			res.status(404).end();
 			return;
 		}
-		res.status(200).send(JSON.stringify({'time:change': '+' + (value - after)}) + '\n');
+
+		var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
+
+		if(value - after == 0 && wait) {
+			var l = {type: 'changes', stream: false, res: res};
+			listeners.push(l);
+			req.on('close', function () {
+				l.destroy();
+			});
+			l.timer = setTimeout(function () {
+				res.send(valueStr + '\n');
+				l.destroy();
+			}, wait * 1000);
+			l.destroy = function () {
+				if(l.timer) {
+					clearTimeout(l.timer);
+				}
+				var i = listeners.indexOf(l);
+				listeners.splice(i, 1);
+			};
+			return;
+		}
+
+		res.status(200).send(valueStr + '\n');
 	} else {
 		var inm = req.get('If-None-Match');
-		if (inm == etag) {
+		if(inm == etag) {
+			if(wait) {
+				var l = {type: 'value', stream: false, res: res};
+				listeners.push(l);
+				req.on('close', function () {
+					l.destroy();
+				});
+				l.timer = setTimeout(function () {
+					res.status(304).end();
+					l.destroy();
+				}, wait * 1000);
+				l.destroy = function () {
+					if(l.timer) {
+						clearTimeout(l.timer);
+					}
+					var i = listeners.indexOf(l);
+					listeners.splice(i, 1);
+				};
+				return;
+			}
+
 			res.status(304).end();
 		} else {
 			res.status(200).send(JSON.stringify({time: value}) + '\n');

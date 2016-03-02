@@ -269,20 +269,24 @@ app.get('/test', function (req, res) {
 		}
 	}
 
-	var sse = false;
+	var stream = false;
+	if('stream' in req.query) {
+		stream = true;
+	}
+
+	var explicitlyAcceptSse = false;
 	var accept = req.get('Accept');
 	if(accept) {
-		// do SSE only if mime type explicitly specified
 		accept = accept.split(',');
 		for(var i = 0; i < accept.length; ++i) {
 			if(accept[i].split(';')[0].trim() == 'text/event-stream') {
-				sse = true;
+				explicitlyAcceptSse = true;
 				break;
 			}
 		}
 	}
 
-	if(sse) {
+	if(stream || explicitlyAcceptSse) {
 		// Last-Event-ID supersedes 'after' query param
 		if(lastEventId) {
 			after = lastEventId;

@@ -10,22 +10,28 @@ var server = app.listen(process.env.PORT || 3000, function () {
 
 var listeners = [];
 
+// path object:
+//   path: uri path
+//   type: value|changes|hint
+//   response: response body if wait times out
+//   responseStatus: response status code if wait times out
+//   responseHeaders: response headers if wait times out
+//   reliable: bool
 // options:
 //   req: request object
 //   res: response object
-//   type: value|changes|hint
+//   paths: list of path objects
 //   stream: bool
+//   multi: bool
 //   wait: int
-//   response: response body if wait times out
-//   responseStatus: response status code if wait times out
 //   timeout: int
 var newListener = function (options) {
 	var l = {
 		req: options.req,
 		res: options.res,
-		type: options.type,
+		paths: options.paths,
 		stream: options.stream,
-		reliable: options.reliable
+		multi: options.multi
 	};
 	listeners.push(l);
 	options.req.on('close', function () {
@@ -34,7 +40,22 @@ var newListener = function (options) {
 	if(options.wait) {
 		l.timer = setTimeout(function () {
 			l.timer = null;
-			l.res.status(options.responseStatus || 200).send(options.response || '');
+			if(l.multi) {
+				var responses = {};
+				for(var i = 0; i < l.paths.length; ++i) {
+					var p = l.paths[i];
+					responses[p.path] = {
+						code: p.responseStatus || 200,
+						body: p.response || ''
+					};
+					if(p.responseHeaders) {
+						responses[p.path].headers = p.responseHeaders;
+					}
+				}
+				l.res.status(200).send(JSON.stringify(responses) + '\n');
+			} else {
+				l.res.status(options.responseStatus || 200).send(options.response || '');
+			}
 			l.destroy();
 		}, options.wait * 1000);
 	}
@@ -88,73 +109,97 @@ setInterval(function () {
 	for(var i = 0; i < listeners.length; ++i) {
 		var l = listeners[i];
 
-		var value;
-		var old;
-		if(timeValue != oldTimeValue && l.req.path == '/test') {
-			value = timeValue;
-			old = oldTimeValue;
-		} else if(timeValue2 != oldTimeValue2 && l.req.path == '/test2') {
-			value = timeValue2;
-			old = oldTimeValue2;
-		} else {
-			continue;
-		}
+		for(var k = 0; k < l.paths.length; ++k) {
+			var p = l.paths[k];
 
-		// drop messages to simulate unreliability
-		if(!l.reliable && value % 30 == 0) {
-			continue;
-		}
+			var value;
+			var old;
+			if(timeValue != oldTimeValue && p.path == '/test') {
+				value = timeValue;
+				old = oldTimeValue;
+			} else if(timeValue2 != oldTimeValue2 && p.path == '/test2') {
+				value = timeValue2;
+				old = oldTimeValue2;
+			} else {
+				continue;
+			}
 
-		if(l.type == 'hint') {
-			l.res.write('event: update\ndata:\n\n');
-		} else if(l.type == 'changes') {
-			var links = [];
-			if(l.reliable) {
-				links.push('<' + req.path + '?reliable&after=' + value + '>; rel=changes-stream');
-			} else {
-				links.push('<' + req.path + '?after=' + value + '>; rel=changes');
+			// drop messages to simulate unreliability
+			if(!p.reliable && value % 30 == 0) {
+				continue;
 			}
-			var meta = {
-				'Content-Type': 'application/json',
-				'Link': links.join(', ')
-			};
-			if(!l.reliable) {
-				meta['Changes-Id'] = '' + value;
-				meta['Previous-Changes-Id'] = '' + old;
-			}
-			var valueStr = JSON.stringify({'time:change': '+' + (value - old)});
-			if(l.stream) {
-				var s = 'event: update\n';
-				if(l.reliable) {
-					s += 'id: ' + value + '\n';
+
+			if(p.type == 'hint') {
+				l.res.write('event: update\ndata:\n\n');
+			} else if(p.type == 'changes') {
+				var links = [];
+				if(p.reliable) {
+					links.push('<' + p.path + '?reliable&after=' + value + '>; rel=changes-stream');
+				} else {
+					links.push('<' + p.path + '?after=' + value + '>; rel=changes');
 				}
-				s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
-				l.res.write(s);
-			} else {
-				l.res.set(meta);
-				l.res.send(valueStr + '\n');
-				l.destroy();
-			}
-		} else {
-			var meta = {
-				'Content-Type': 'application/json',
-				'ETag': '"' + value + '"',
-			};
-			if(!l.reliable) {
-				meta['Previous-ETag'] = '"' + old + '"';
-			}
-			var valueStr = JSON.stringify({time: value});
-			if(l.stream) {
-				var s = 'event: update\n';
-				if(l.reliable) {
-					s += 'id: ' + value + '\n';
+				var meta = {
+					'Content-Type': 'application/json',
+					'Link': links.join(', ')
+				};
+				if(l.stream && !p.reliable) {
+					meta['Changes-Id'] = '' + value;
+					meta['Previous-Changes-Id'] = '' + old;
 				}
-				s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
-				l.res.write(s);
+				var valueStr = JSON.stringify({'time:change': '+' + (value - old)});
+				if(l.stream) {
+					var s = 'event: update\n';
+					if(p.reliable) {
+						s += 'id: ' + value + '\n';
+					}
+					s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
+					l.res.write(s);
+				} else {
+					if(l.multi) {
+						var responses = {};
+						responses[p.path] = {
+							code: 200,
+							headers: meta,
+							body: valueStr + '\n'
+						};
+						l.res.send(JSON.stringify(responses) + '\n');
+					} else {
+						l.res.set(meta);
+						l.res.send(valueStr + '\n');
+					}
+					l.destroy();
+				}
 			} else {
-				l.res.set(meta);
-				l.res.send(valueStr + '\n');
-				l.destroy();
+				var meta = {
+					'Content-Type': 'application/json',
+					'ETag': '"' + value + '"',
+				};
+				if(l.stream && !p.reliable) {
+					meta['Previous-ETag'] = '"' + old + '"';
+				}
+				var valueStr = JSON.stringify({time: value});
+				if(l.stream) {
+					var s = 'event: update\n';
+					if(p.reliable) {
+						s += 'id: ' + value + '\n';
+					}
+					s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
+					l.res.write(s);
+				} else {
+					if(l.multi) {
+						var responses = {};
+						responses[p.path] = {
+							code: 200,
+							headers: meta,
+							body: valueStr + '\n'
+						};
+						l.res.send(JSON.stringify(responses) + '\n');
+					} else {
+						l.res.set(meta);
+						l.res.send(valueStr + '\n');
+					}
+					l.destroy();
+				}
 			}
 		}
 	}
@@ -166,6 +211,17 @@ var getTime = function () {
 
 var getTime2 = function () {
 	return timeValue2;
+};
+
+var applyCors = function (req, res, applyHeaders, exposeHeaders) {
+	res.set('Access-Control-Max-Age', '3600');
+	res.set('Access-Control-Allow-Origin', req.get('Origin') || '*');
+	if(allowHeaders.length > 0) {
+		res.set('Access-Control-Allow-Headers', allowHeaders.join(', '));
+	}
+	if(exposeHeaders.length > 0) {
+		res.set('Access-Control-Expose-Headers', exposeHeaders.join(', '));
+	}
 };
 
 var headerHandler = function (value, req, res) {
@@ -191,11 +247,12 @@ var headerHandler = function (value, req, res) {
 			'value-stream': 1,
 			'changes-wait': 1,
 			'changes-stream': 1,
-			'hint-stream': 1
+			'hint-stream': 1,
+			'multiplex-wait': 1
 		};
 	}
 
-	var allowHeaders = ['If-None-Match', 'Wait'];
+	var allowHeaders = ['If-None-Match', 'Wait', 'Uri'];
 	var exposeHeaders = [];
 	exposeHeaders.push('ETag');
 	exposeHeaders.push('Previous-ETag');
@@ -205,6 +262,11 @@ var headerHandler = function (value, req, res) {
 	if(!('no_poll_header' in req.query)) {
 		res.set('X-Poll-Interval', '10');
 		exposeHeaders.push('X-Poll-Interval');
+	}
+
+	var noShareMultiplex = false;
+	if('no_share_multiplex' in req.query) {
+		noShareMultiplex = true;
 	}
 
 	var links = [];
@@ -234,6 +296,13 @@ var headerHandler = function (value, req, res) {
 	if('hint-stream' in relTypes) {
 		links.push('<' + req.path + '?hints>; rel=hint-stream');
 	}
+	if('multiplex-wait' in relTypes) {
+		if(noShareMultiplex) {
+			links.push('<' + req.path + '/multi>; rel=multiplex-wait');
+		} else {
+			links.push('</multi>; rel=multiplex-wait');
+		}
+	}
 
 	if(links.length > 0) {
 		res.set('Link', links.join(', '));
@@ -242,15 +311,7 @@ var headerHandler = function (value, req, res) {
 
 	res.set('Changes-Id', '' + value);
 
-	// cors
-	res.set('Access-Control-Max-Age', '3600');
-	res.set('Access-Control-Allow-Origin', req.get('Origin') || '*');
-	if(allowHeaders.length > 0) {
-		res.set('Access-Control-Allow-Headers', allowHeaders.join(', '));
-	}
-	if(exposeHeaders.length > 0) {
-		res.set('Access-Control-Expose-Headers', exposeHeaders.join(', '));
-	}
+	applyCors(req, res, allowHeaders, exposeHeaders);
 
 	return etag;
 };
@@ -335,10 +396,9 @@ var handler = function (value, req, res) {
 		newListener({
 			req: req,
 			res: res,
-			type: type,
+			paths: [{path: req.path, type: type, reliable: reliable}],
 			stream: true,
-			timeout: timeout,
-			reliable: reliable
+			timeout: timeout
 		});
 
 		res.set('Content-Type', 'text/event-stream');
@@ -394,10 +454,8 @@ var handler = function (value, req, res) {
 			newListener({
 				req: req,
 				res: res,
-				type: 'changes',
-				stream: false,
+				paths: [{path: req.path, type: 'changes', response: valueStr + '\n'}],
 				wait: wait,
-				response: valueStr + '\n',
 				timeout: timeout
 			});
 			return;
@@ -411,10 +469,8 @@ var handler = function (value, req, res) {
 				newListener({
 					req: req,
 					res: res,
-					type: 'value',
-					stream: false,
+					paths: [{path: req.path, type: 'value', responseStatus: 304}],
 					wait: wait,
-					responseStatus: 304,
 					timeout: timeout
 				});
 				return;
@@ -424,6 +480,219 @@ var handler = function (value, req, res) {
 		} else {
 			res.status(200).send(JSON.stringify({time: value}) + '\n');
 		}
+	}
+};
+
+// return {uri, inm}
+var parseUriHeader = function (h) {
+	if(h.length < 2 || h[0] != '<') {
+		return null;
+	}
+
+	var i = h.indexOf('>', 1);
+	if(i < 0) {
+		return null;
+	}
+
+	var uri = h.substring(1, i);
+	var inm = null;
+
+	i = h.indexOf(';', i + 1);
+	if(i >= 0) {
+		var param = h.substring(i + 1).trim();
+		i = param.indexOf('=');
+		if(i < 0) {
+			return null;
+		}
+
+		if(param.substring(0, i).toLowerCase() == 'if-none-match') {
+			inm = param.substring(i + 1);
+		}
+	}
+
+	return {uri: uri, inm: inm};
+};
+
+var multiHandler = function (allowed, req, res) {
+	var allowHeaders = ['If-None-Match', 'Wait', 'Uri'];
+	var exposeHeaders = [];
+	exposeHeaders.push('ETag');
+	exposeHeaders.push('Previous-ETag');
+	exposeHeaders.push('Changes-Id');
+	exposeHeaders.push('Previous-Changes-Id');
+
+	if(!('no_poll_header' in req.query)) {
+		res.set('X-Poll-Interval', '10');
+		exposeHeaders.push('X-Poll-Interval');
+	}
+
+	applyCors(req, res, allowHeaders, exposeHeaders);
+
+	var uri = req.get('Uri');
+	if(!uri) {
+		res.status(400).send('No \'Uri\' header.\n');
+		return;
+	}
+
+	var timeout = null;
+	if('timeout' in req.query) {
+		timeout = parseInt(req.query.timeout);
+		if(isNaN(timeout) || timeout < 0) {
+			res.status(400).send('Invalid \'timeout\' value.\n');
+			return;
+		}
+	}
+
+	var wait = req.get('Wait');
+	if(wait) {
+		wait = parseInt(wait);
+		if(isNaN(wait) || wait < 0) {
+			res.status(400).send('Invalid \'Wait\' value.\n');
+			return;
+		}
+	} else {
+		wait = 0;
+	}
+
+	var ulist = [];
+	var parts = uri.split(',');
+	for(var i = 0; i < parts.length; ++i) {
+		var u = parseUriHeader(parts[i].trim());
+		if(!u) {
+			res.status(400).send('Invalid \'Uri\' header.\n');
+			return;
+		}
+
+		var parsed = url.parse(u.uri, true);
+		u.path = parsed.path;
+		u.query = parsed.query;
+
+		for(var k = 0; k < ulist.length; ++k) {
+			if(ulist[k].path == u.path) {
+				res.status(400).send('Duplicate multi request path.\n');
+				return;
+			}
+		}
+
+		ulist.push(u);
+	}
+
+	var haveResponses = false;
+	var responses = {};
+	var listenPaths = [];
+
+	for(var i = 0; i < ulist.length; ++i) {
+		var u = ulist[i];
+
+		if(allowed.indexOf(u.path) == -1) {
+			res.status(400).send('Invalid multi request path.\n');
+			return;
+		}
+
+		var value;
+		if(u.path == '/test') {
+			value = getTime();
+		} else if(u.path == '/test2') {
+			value = getTime2();
+		} else {
+			res.status(400).send('Invalid multi request path.\n');
+			return;
+		}
+
+		var headers = {};
+
+		var etag = '"' + value + '"';
+		headers['ETag'] = etag;
+
+		var links = [];
+		links.push('<' + u.path + '?after=' + value + '>; rel=changes');
+
+		headers['Link'] = links.join(', ');
+
+		var after = null;
+		if('after' in u.query) {
+			after = parseInt(u.query.after);
+			if(isNaN(after)) {
+				res.status(400).send('Invalid \'after\' value.\n');
+				return;
+			}
+		}
+
+		if(after != null) {
+			if(after > value) {
+				// went back in time? tell the client to start over
+				responses[u.path] = {
+					code: 404,
+					headers: headers,
+					body: 'Invalid changes URI, start over.\n'
+				};
+
+				haveResponses = true;
+				continue;
+			}
+
+			// changes
+			var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
+
+			if(value - after == 0 && wait) {
+				listenPaths.push({
+					path: u.path,
+					type: 'changes',
+					response: valueStr + '\n',
+					responseHeaders: headers
+				});
+				continue;
+			}
+
+			responses[u.path] = {
+				code: 200,
+				headers: headers,
+				body: valueStr + '\n'
+			};
+
+			haveResponses = true;
+		} else {
+			// value
+			if(u.inm == etag) {
+				if(wait) {
+					listenPaths.push({
+						path: u.path,
+						type: 'value',
+						responseStatus: 304,
+						responseHeaders: headers
+					});
+					continue;
+				}
+
+				responses[u.path] = {
+					code: 304,
+					headers: headers
+				};
+
+				haveResponses = true;
+			} else {
+				responses[u.path] = {
+					code: 200,
+					headers: headers,
+					body: JSON.stringify({time: value}) + '\n'
+				};
+
+				haveResponses = true;
+			}
+		}
+	}
+
+	if(haveResponses) {
+		res.send(JSON.stringify(responses) + '\n');
+	} else {
+		newListener({
+			req: req,
+			res: res,
+			paths: listenPaths,
+			multi: true,
+			wait: wait,
+			timeout: timeout
+		});
 	}
 };
 
@@ -447,4 +716,16 @@ app.head('/test2', function (req, res) {
 app.get('/test2', function (req, res) {
 	var value = getTime2();
 	handler(value, req, res);
+});
+
+app.get('/multi', function (req, res) {
+	multiHandler(['/test', '/test2'], req, res);
+});
+
+app.get('/test/multi', function (req, res) {
+	multiHandler(['/test'], req, res);
+});
+
+app.get('/test2/multi', function (req, res) {
+	multiHandler(['/test2'], req, res);
 });

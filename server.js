@@ -213,7 +213,7 @@ var getTime2 = function () {
 	return timeValue2;
 };
 
-var applyCors = function (req, res, applyHeaders, exposeHeaders) {
+var applyCors = function (req, res, allowHeaders, exposeHeaders) {
 	res.set('Access-Control-Max-Age', '3600');
 	res.set('Access-Control-Allow-Origin', req.get('Origin') || '*');
 	if(allowHeaders.length > 0) {

@@ -21,6 +21,8 @@ Link: </test?after=1456905833>; rel=changes-wait
 Link: </test>; rel=value-stream
 Link: </test?changes>; rel=changes-stream
 Link: </test?hints>; rel=hint-stream
+Link: </multi>; rel=multiplex-wait
+Link: </ws>; rel=multiplex-socket
 Content-Type: application/json
 
 {"time": 1456905833}

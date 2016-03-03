@@ -263,8 +263,8 @@ Streamed value (wrapped for readability):
 ```http
 event: update
 data: {"Content-Type":"application/json",
-       "ETag":"\"1456905843\"",
-       "Previous-ETag":"\"1456905833\""}
+    "ETag":"\"1456905843\"",
+    "Previous-ETag":"\"1456905833\""}
 data: {"time":1456905843}
 
 ```
@@ -273,16 +273,14 @@ If this were a changes stream instead of a value stream, updates would look like
 ```http
 event: update
 data: {"Content-Type":"application/json",
-       "Link":"</test?after=1456905843>; rel=changes",
-       "Changes-Id":"1456905843",
-       "Previous-Changes-Id":"1456905833"}
+    "Link":"</test?after=1456905843>; rel=changes",
+    "Changes-Id":"1456905843",
+    "Previous-Changes-Id":"1456905833"}
 data: {"time:change":"+10"}
 
 ```
 
-The `Previous-ETag` and `Previous-Changes-Id` fields inside the updates can be used to detect missing data. The client can recover value data by polling the resource normally. The client can recover changes data by polling the last received `changes` link.
-
-To test client behavior in the absence of `Previous-ETag`, set the `no_previous` query parameter in the request.
+The `Previous-ETag` and `Previous-Changes-Id` fields inside the updates can be used to detect missing data. The client can recover value data by polling the resource normally. The client can recover changes data by polling the last received `changes` link. To test client behavior in the absence of `Previous-ETag`, set the `no_previous` query parameter in the request.
 
 ### Reliable streaming
 
@@ -317,8 +315,9 @@ Content-Type: text/event-stream
 Transfer-Encoding: chunked
 
 event: open
+id: 1456905833
 data: {"Content-Type":"application/json",
-       "ETag":"\"1456905833\""}
+    "ETag":"\"1456905833\""}
 data: {"time":1456905833}
 
 ```
@@ -326,8 +325,9 @@ data: {"time":1456905833}
 Streamed value (wrapped for readability):
 ```http
 event: update
+id: 1456905843
 data: {"Content-Type":"application/json",
-       "ETag":"\"1456905843\""}
+    "ETag":"\"1456905843\""}
 data: {"time":1456905843}
 
 ```
@@ -346,8 +346,9 @@ Content-Type: text/event-stream
 Transfer-Encoding: chunked
 
 event: open
+id: 1456905833
 data: {"Content-Type":"application/json",
-       "Link":"</test?after=1456905833>; rel=changes"}
+    "Link":"</test?after=1456905833>; rel=changes"}
 data: {"time:change":"+3"}
 
 ```
@@ -355,16 +356,132 @@ data: {"time:change":"+3"}
 Streamed changes (wrapped for readability):
 ```http
 event: update
+id: 1456905843
 data: {"Content-Type":"application/json",
-       "Link":"</test?after=1456905843>; rel=changes"}
+    "Link":"</test?after=1456905843>; rel=changes"}
 data: {"time:change":"+10"}
 
 ```
 
+The server also supports SSE stream resumption if the client includes a `Last-Event-ID` header:
+```http
+GET /test?reliable&after=1456905830 HTTP/1.1
+Host: test.liveresource.org
+Accept: text/event-stream
+Last-Event-ID: 1456905843
+```
+
+The `Last-Event-ID` header takes precedence over any checkpoint information that may have been encoded in the URI.
+
 ### Socket
 
-TBD.
+It is possible to stream multiple resources over a single WebSocket. There are 3 `multiplex-socket` endpoints:
+
+* `/ws`: supports streaming `/test` or `/test2`.
+* `/test/ws`: supports streaming `/test` only.
+* `/test2/ws`: supports streaming `/test2` only.
+
+The `no_share_multiplex` option can be used to tell the server to not advertise the same multiplex link for different resources. This can be useful to force clients to use different multiplex endpoints at the same time, for testing.
+
+Once the socket is connected, requests can be issued.
+
+Requesting a value stream:
+```
+GET /test
+```
+
+Acknowledgement response:
+```
+OK /test
+```
+
+Streamed value (wrapped for readability):
+```
+* /test {"Content-Type":"application/json",
+    "ETag":"\"1456905843\"",
+    "Previous-ETag":"\"1456905833\""}
+{"time":1456905843}
+```
+
+Stop listening to a stream:
+```
+CANCEL /test
+```
+
+Acknowledgement response:
+```
+OK /test
+```
+
+Requesting a changes stream:
+```
+GET /test?changes
+```
+
+Acknowledgement response:
+```
+OK /test?changes
+```
+
+Streamed changes (wrapped for readability):
+```
+* /test?changes {"Content-Type":"application/json",
+    "Link":"</test?after=1456905843>; rel=changes",
+    "Changes-Id":"1456905843",
+    "Previous-Changes-Id":"1456905833"}
+{"time:change":"+10"}
+```
+
+The `Previous-ETag` and `Previous-Changes-Id` fields inside the updates can be used to detect missing data. The client can recover value data by polling the resource normally. The client can recover changes data by polling the last received `changes` link. To test client behavior in the absence of `Previous-ETag`, set the `no_previous` query parameter in the request.
 
 ### Reliable socket
 
-TBD.
+The server supports reliable streaming through a WebSocket. To use it, include the `reliable` query parameter on the resources to listen on. Note that if you discover resource URIs via links, this parameter will already be included.
+
+Requesting a reliable value stream:
+```
+GET /test?reliable
+```
+
+Acknowledgement response:
+```
+OK /test?reliable
+```
+
+Acknowledgement will be immediately followed by initial value (wrapped for readability):
+```
+* /test?reliable {"Content-Type":"application/json",
+    "ETag":"\"1456905833\""}
+{"time":1456905833}
+```
+
+Streamed value (wrapped for readability):
+```
+* /test {"Content-Type":"application/json",
+    "ETag":"\"1456905843\""}
+{"time":1456905843}
+```
+
+Requesting a reliable changes stream, from an older checkpoint:
+```
+GET /test?reliable&after=1456905830
+```
+
+Acknowledgement response:
+```
+OK /test?reliable&after=1456905830
+```
+
+Acknowledgement will be immediately followed by initial changes (wrapped for readability):
+```
+* /test?reliable&after=1456905830 {"Content-Type":"application/json",
+    "Link":"</test?reliable&after=1456905833>; rel=changes"}
+{"time:change":"+3"}
+```
+
+Streamed changes (wrapped for readability):
+```http
+* /test?reliable&after=1456905830 {"Content-Type":"application/json",
+    "Link":"</test?reliable&after=1456905843>; rel=changes"}
+{"time:change":"+10"}
+```

@@ -1,6 +1,7 @@
 var express = require('express');
 var path = require('path');
 var url = require('url');
+var WebSocketServer = require('ws').Server;
 
 var app = express();
 
@@ -11,7 +12,8 @@ var server = app.listen(process.env.PORT || 3000, function () {
 var listeners = [];
 
 // path object:
-//   path: uri path
+//   path: uri canonical path
+//   uri: uri registered by client
 //   type: value|changes|hint
 //   response: response body if wait times out
 //   responseStatus: response status code if wait times out
@@ -29,14 +31,24 @@ var newListener = function (options) {
 	var l = {
 		req: options.req,
 		res: options.res,
+		ws: options.ws,
 		paths: options.paths,
 		stream: options.stream,
 		multi: options.multi
 	};
 	listeners.push(l);
-	options.req.on('close', function () {
-		l.destroy();
-	});
+	if(l.req) {
+		l.req.on('close', function () {
+			l.destroy();
+		});
+	}
+	if(l.ws) {
+		l.ws.on('close', function () {
+			//console.log('ws connection closed');
+			l.ws.close();
+			l.destroy();
+		});
+	}
 	if(options.wait) {
 		l.timer = setTimeout(function () {
 			l.timer = null;
@@ -62,7 +74,11 @@ var newListener = function (options) {
 	if(options.timeout) {
 		l.timeoutTimer = setTimeout(function () {
 			l.timeoutTimer = null;
-			l.res.socket.destroy();
+			if(l.res) {
+				l.res.socket.destroy();
+			} else if(l.ws) {
+				l.ws.close();
+			}
 			l.destroy();
 		}, options.timeout * 1000);
 	}
@@ -130,7 +146,11 @@ setInterval(function () {
 			}
 
 			if(p.type == 'hint') {
-				l.res.write('event: update\ndata:\n\n');
+				if(l.res) {
+					l.res.write('event: update\ndata:\n\n');
+				} else if(l.ws) {
+					l.ws.send('* ' + p.uri);
+				}
 			} else if(p.type == 'changes') {
 				var links = [];
 				if(p.reliable) {
@@ -148,12 +168,16 @@ setInterval(function () {
 				}
 				var valueStr = JSON.stringify({'time:change': '+' + (value - old)});
 				if(l.stream) {
-					var s = 'event: update\n';
-					if(p.reliable) {
-						s += 'id: ' + value + '\n';
+					if(l.res) {
+						var s = 'event: update\n';
+						if(p.reliable) {
+							s += 'id: ' + value + '\n';
+						}
+						s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
+						l.res.write(s);
+					} else if(l.ws) {
+						l.ws.send('* ' + p.uri + ' ' + JSON.stringify(meta) + '\n' + valueStr);
 					}
-					s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
-					l.res.write(s);
 				} else {
 					if(l.multi) {
 						var responses = {};
@@ -179,12 +203,16 @@ setInterval(function () {
 				}
 				var valueStr = JSON.stringify({time: value});
 				if(l.stream) {
-					var s = 'event: update\n';
-					if(p.reliable) {
-						s += 'id: ' + value + '\n';
+					if(l.res) {
+						var s = 'event: update\n';
+						if(p.reliable) {
+							s += 'id: ' + value + '\n';
+						}
+						s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
+						l.res.write(s);
+					} else if(l.ws) {
+						l.ws.send('* ' + p.uri + ' ' + JSON.stringify(meta) + '\n' + valueStr);
 					}
-					s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
-					l.res.write(s);
 				} else {
 					if(l.multi) {
 						var responses = {};
@@ -248,7 +276,8 @@ var headerHandler = function (value, req, res) {
 			'changes-wait': 1,
 			'changes-stream': 1,
 			'hint-stream': 1,
-			'multiplex-wait': 1
+			'multiplex-wait': 1,
+			'multiplex-socket': 1
 		};
 	}
 
@@ -301,6 +330,13 @@ var headerHandler = function (value, req, res) {
 			links.push('<' + req.path + '/multi>; rel=multiplex-wait');
 		} else {
 			links.push('</multi>; rel=multiplex-wait');
+		}
+	}
+	if('multiplex-socket' in relTypes) {
+		if(noShareMultiplex) {
+			links.push('<' + req.path + '/ws>; rel=multiplex-socket');
+		} else {
+			links.push('</ws>; rel=multiplex-socket');
 		}
 	}
 
@@ -564,7 +600,7 @@ var multiHandler = function (allowed, req, res) {
 		}
 
 		var parsed = url.parse(u.uri, true);
-		u.path = parsed.path;
+		u.path = parsed.pathname;
 		u.query = parsed.query;
 
 		for(var k = 0; k < ulist.length; ++k) {
@@ -729,3 +765,180 @@ app.get('/test/multi', function (req, res) {
 app.get('/test2/multi', function (req, res) {
 	multiHandler(['/test2'], req, res);
 });
+
+var wsEndpoints = {
+	'/ws': ['/test', '/test2'],
+	'/test/ws': ['/test'],
+	'/test2/ws': ['/test2']
+};
+
+for(var e in wsEndpoints) {
+	var allowed = wsEndpoints[e];
+
+	var wss = new WebSocketServer({
+		server: server,
+		path: e,
+		handleProtocols: function (protocols, cb) {
+			if (protocols && protocols.indexOf('liveresource') != -1) {
+				cb(true, 'liveresource');
+			} else {
+				cb(true);
+			}
+		}
+	});
+
+	(function (path, allowed) {
+		wss.on('connection', function (ws) {
+			//console.log('ws connection opened: ' + path);
+
+			var parsed = url.parse(ws.upgradeReq.url, true);
+
+			var timeout = null;
+			if('timeout' in parsed.query) {
+				timeout = parseInt(parsed.query.timeout);
+				if(isNaN(timeout) || timeout < 0) {
+					ws.close();
+					return;
+				}
+			}
+
+			var l = newListener({
+				ws: ws,
+				paths: [],
+				stream: true,
+				multi: true,
+				timeout: timeout
+			});
+
+			ws.on('message', function (message) {
+				var args = message.split(' ');
+
+				if(args.length < 2) {
+					ws.send('ERR * 400\nBad format.');
+					return;
+				}
+
+				var method = args[0].toUpperCase();
+				var uri = args[1];
+
+				if(uri.length == 0) {
+					ws.send('ERR * 400\nBad format.');
+					return;
+				}
+
+				if(method.length == 0) {
+					ws.send('ERR ' + uri + ' 400\nBad format.');
+					return;
+				}
+
+				var parsed = url.parse(uri, true);
+
+				var u = {};
+				u.path = parsed.pathname;
+				u.query = parsed.query;
+
+				var reliable = false;
+				if('reliable' in u.query) {
+					reliable = true;
+				}
+
+				if(allowed.indexOf(u.path) == -1) {
+					// not an allowed path
+					ws.send('ERR ' + uri + ' 400\nInvalid multi request path.');
+					return;
+				}
+
+				var after = null;
+				if('after' in u.query) {
+					after = parseInt(u.query.after);
+					if(isNaN(after)) {
+						ws.send('ERR ' + uri + ' 400\nInvalid \'after\' value.');
+						return;
+					}
+				}
+
+				if(method == 'GET') {
+					for(var i = 0; i < l.paths.length; ++i) {
+						if(l.paths[i].path == u.path) {
+							// already listening
+							ws.send('ERR ' + uri + ' 400\nAlready listening.');
+							return;
+						}
+					}
+
+					var value;
+					if(u.path == '/test') {
+						value = getTime();
+					} else if(u.path == '/test2') {
+						value = getTime2();
+					} else {
+						ws.send('ERR ' + uri + ' 404\nNot found');
+						return;
+					}
+
+					var type;
+					if('hints' in u.query) {
+						type = 'hint';
+					} else if(after != null || 'changes' in u.query) {
+						type = 'changes';
+					} else {
+						type = 'value';
+					}
+
+					if(type == 'changes' && reliable && after == null) {
+						// reliable changes requires after param
+						ws.send('ERR ' + uri + ' 400\nReliable changes stream requires \'after\' parameter.');
+						return;
+					}
+
+					l.paths.push({
+						path: u.path,
+						uri: uri,
+						type: type,
+						reliable: reliable
+					});
+					ws.send('OK ' + uri);
+
+					if(reliable) {
+						// write initial data
+						if(type == 'changes') {
+							if(value - after > 0) {
+								var links = [];
+								links.push('<' + u.path + '?reliable&after=' + value + '>; rel=changes');
+								var meta = {
+									'Content-Type': 'application/json',
+									'Link': links.join(', ')
+								};
+								var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
+								ws.send('* ' + uri + ' ' + JSON.stringify(meta) + '\n' + valueStr);
+							}
+						} else if(type == 'value') {
+							var meta = {
+								'Content-Type': 'application/json',
+								'ETag': '"' + value + '"'
+							};
+							var valueStr = JSON.stringify({time: value});
+							ws.send('* ' + uri + ' ' + JSON.stringify(meta) + '\n' + valueStr);
+						}
+					}
+				} else if(method == 'CANCEL') {
+					for(var i = 0; i < l.paths.length; ++i) {
+						var p = l.paths[i];
+						if(p.path == u.path) {
+							l.paths.splice(i, 1);
+							ws.send('OK ' + p.uri);
+							return;
+						}
+					}
+					if(!found) {
+						// wasn't listening
+						ws.send('ERR ' + uri + ' 400\nWasn\'t listening.');
+						return;
+					}
+				} else {
+					ws.send('ERR ' + uri + ' 405\nMethod not allowed.');
+				}
+			});
+		});
+	}(e, allowed));
+}

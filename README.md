@@ -30,6 +30,7 @@ Query parameters can be used to control which features are advertised and how th
 
 * `types={types}`: Comma-separated list of Link rel types to support, e.g. `changes,value-wait` (default all).
 * `no_poll_header`: If present, don't set `X-Poll-Interval`.
+* `no_previous`: If present, don't provide `Previous-ETag` in stream/socket pushes.
 * `reliable`: If present, advertise reliable versions of transports.
 * `timeout={x}`: Tell the server to close the connection after `x` seconds. Use to simulate disconnects.
 

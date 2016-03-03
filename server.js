@@ -61,75 +61,100 @@ var newListener = function (options) {
 	return l;
 }
 
+var offset2 = 3600; // 1 hour
+
 var timeValue = Math.floor(Date.now() / 1000);
+var timeValue2 = timeValue + offset2;
 
 setInterval(function () {
-	var old = timeValue;
+	var oldTimeValue = timeValue;
+	var oldTimeValue2 = timeValue2;
+
 	var cur = Math.floor(Date.now() / 1000);
-	if(cur % 10 == 0) {
+	if(cur % 3 == 0) {
 		timeValue = cur;
 	}
 
-	if(timeValue != old) {
-		for(var i = 0; i < listeners.length; ++i) {
-			var l = listeners[i];
+	var cur2 = cur + offset2;
+	if(cur2 % 10 == 0) {
+		timeValue2 = cur2;
+	}
 
-			// drop messages to simulate unreliability
-			if(!l.reliable && timeValue % 30 == 0) {
-				continue;
-			}
+	if(timeValue == oldTimeValue && timeValue2 == oldTimeValue2) {
+		// no change
+		return;
+	}
 
-			if(l.type == 'hint') {
-				l.res.write('event: update\ndata:\n\n');
-			} else if(l.type == 'changes') {
-				var links = [];
-				if(l.reliable) {
-					links.push('</test?reliable&after=' + timeValue + '>; rel=changes-stream');
-				} else {
-					links.push('</test?after=' + timeValue + '>; rel=changes');
-				}
-				var meta = {
-					'Content-Type': 'application/json',
-					'Link': links.join(', ')
-				};
-				if(!l.reliable) {
-					meta['Changes-Id'] = '' + timeValue;
-					meta['Previous-Changes-Id'] = '' + old;
-				}
-				var valueStr = JSON.stringify({'time:change': '+' + (timeValue - old)});
-				if(l.stream) {
-					var s = 'event: update\n';
-					if(l.reliable) {
-						s += 'id: ' + timeValue + '\n';
-					}
-					s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
-					l.res.write(s);
-				} else {
-					l.res.set(meta);
-					l.res.send(valueStr + '\n');
-					l.destroy();
-				}
+	for(var i = 0; i < listeners.length; ++i) {
+		var l = listeners[i];
+
+		var value;
+		var old;
+		if(timeValue != oldTimeValue && l.req.path == '/test') {
+			value = timeValue;
+			old = oldTimeValue;
+		} else if(timeValue2 != oldTimeValue2 && l.req.path == '/test2') {
+			value = timeValue2;
+			old = oldTimeValue2;
+		} else {
+			continue;
+		}
+
+		// drop messages to simulate unreliability
+		if(!l.reliable && value % 30 == 0) {
+			continue;
+		}
+
+		if(l.type == 'hint') {
+			l.res.write('event: update\ndata:\n\n');
+		} else if(l.type == 'changes') {
+			var links = [];
+			if(l.reliable) {
+				links.push('<' + req.path + '?reliable&after=' + value + '>; rel=changes-stream');
 			} else {
-				var meta = {
-					'Content-Type': 'application/json',
-					'ETag': '"' + timeValue + '"',
-				};
-				if(!l.reliable) {
-					meta['Previous-ETag'] = '"' + old + '"';
+				links.push('<' + req.path + '?after=' + value + '>; rel=changes');
+			}
+			var meta = {
+				'Content-Type': 'application/json',
+				'Link': links.join(', ')
+			};
+			if(!l.reliable) {
+				meta['Changes-Id'] = '' + value;
+				meta['Previous-Changes-Id'] = '' + old;
+			}
+			var valueStr = JSON.stringify({'time:change': '+' + (value - old)});
+			if(l.stream) {
+				var s = 'event: update\n';
+				if(l.reliable) {
+					s += 'id: ' + value + '\n';
 				}
-				var valueStr = JSON.stringify({time: timeValue});
-				if(l.stream) {
-					var s = 'event: update\n';
-					if(l.reliable) {
-						s += 'id: ' + timeValue + '\n';
-					}
-					s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
-					l.res.write(s);
-				} else {
-					l.res.set(meta);
-					l.res.send(valueStr + '\n');
-					l.destroy();
+				s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
+				l.res.write(s);
+			} else {
+				l.res.set(meta);
+				l.res.send(valueStr + '\n');
+				l.destroy();
+			}
+		} else {
+			var meta = {
+				'Content-Type': 'application/json',
+				'ETag': '"' + value + '"',
+			};
+			if(!l.reliable) {
+				meta['Previous-ETag'] = '"' + old + '"';
+			}
+			var valueStr = JSON.stringify({time: value});
+			if(l.stream) {
+				var s = 'event: update\n';
+				if(l.reliable) {
+					s += 'id: ' + value + '\n';
 				}
+				s += 'data: ' + JSON.stringify(meta) + '\ndata: ' + valueStr + '\n\n';
+				l.res.write(s);
+			} else {
+				l.res.set(meta);
+				l.res.send(valueStr + '\n');
+				l.destroy();
 			}
 		}
 	}
@@ -139,9 +164,18 @@ var getTime = function () {
 	return timeValue;
 };
 
-var headerHandler = function (value, reliable, req, res) {
+var getTime2 = function () {
+	return timeValue2;
+};
+
+var headerHandler = function (value, req, res) {
 	var etag = '"' + value + '"';
 	res.set('ETag', etag);
+
+	var reliable = false;
+	if('reliable' in req.query) {
+		reliable = true;
+	}
 
 	var relTypes;
 	if(req.query.types) {
@@ -175,30 +209,30 @@ var headerHandler = function (value, reliable, req, res) {
 
 	var links = [];
 	if('changes' in relTypes) {
-		links.push('</test?after=' + value + '>; rel=changes');
+		links.push('<' + req.path + '?after=' + value + '>; rel=changes');
 	}
 	if('value-wait' in relTypes) {
-		links.push('</test>; rel=value-wait');
+		links.push('<' + req.path + '>; rel=value-wait');
 	}
 	if('changes-wait' in relTypes) {
-		links.push('</test?after=' + value + '>; rel=changes-wait');
+		links.push('<' + req.path + '?after=' + value + '>; rel=changes-wait');
 	}
 	if('value-stream' in relTypes) {
 		if(reliable) {
-			links.push('</test?reliable>; rel=value-stream; mode=reliable');
+			links.push('<' + req.path + '?reliable>; rel=value-stream; mode=reliable');
 		} else {
-			links.push('</test>; rel=value-stream');
+			links.push('<' + req.path + '>; rel=value-stream');
 		}
 	}
 	if('changes-stream' in relTypes) {
 		if(reliable) {
-			links.push('</test?reliable&after=' + value + '>; rel=changes-stream; mode=reliable');
+			links.push('<' + req.path + '?reliable&after=' + value + '>; rel=changes-stream; mode=reliable');
 		} else {
-			links.push('</test?changes>; rel=changes-stream');
+			links.push('<' + req.path + '?changes>; rel=changes-stream');
 		}
 	}
 	if('hint-stream' in relTypes) {
-		links.push('</test?hints>; rel=hint-stream');
+		links.push('<' + req.path + '?hints>; rel=hint-stream');
 	}
 
 	if(links.length > 0) {
@@ -221,21 +255,13 @@ var headerHandler = function (value, reliable, req, res) {
 	return etag;
 };
 
-app.head('/test', function (req, res) {
-	var value = getTime();
-	headerHandler(value, req, res);
-	res.send('')
-});
-
-app.get('/test', function (req, res) {
-	var value = getTime();
+var handler = function (value, req, res) {
+	var etag = headerHandler(value, req, res);
 
 	var reliable = false;
 	if('reliable' in req.query) {
 		reliable = true;
 	}
-
-	var etag = headerHandler(value, reliable, req, res);
 
 	var timeout = null;
 	if('timeout' in req.query) {
@@ -323,7 +349,7 @@ app.get('/test', function (req, res) {
 			if(type == 'changes') {
 				if(value - after > 0) {
 					var links = [];
-					links.push('</test?reliable&after=' + value + '>; rel=changes-stream');
+					links.push('<' + req.path + '?reliable&after=' + value + '>; rel=changes-stream');
 					var meta = {
 						'Content-Type': 'application/json',
 						'Link': links.join(', ')
@@ -337,9 +363,9 @@ app.get('/test', function (req, res) {
 			} else if(type == 'value') {
 				var meta = {
 					'Content-Type': 'application/json',
-					'ETag': '"' + timeValue + '"'
+					'ETag': '"' + value + '"'
 				};
-				var valueStr = JSON.stringify({time: timeValue});
+				var valueStr = JSON.stringify({time: value});
 				res.write('event: update\n' +
 					'id: ' + value + '\n' +
 					'data: ' + JSON.stringify(meta) + '\n' +
@@ -399,4 +425,26 @@ app.get('/test', function (req, res) {
 			res.status(200).send(JSON.stringify({time: value}) + '\n');
 		}
 	}
+};
+
+app.head('/test', function (req, res) {
+	var value = getTime();
+	headerHandler(value, req, res);
+	res.send('');
+});
+
+app.get('/test', function (req, res) {
+	var value = getTime();
+	handler(value, req, res);
+});
+
+app.head('/test2', function (req, res) {
+	var value = getTime2();
+	headerHandler(value, req, res);
+	res.send('');
+});
+
+app.get('/test2', function (req, res) {
+	var value = getTime2();
+	handler(value, req, res);
 });

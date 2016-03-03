@@ -480,7 +480,7 @@ Acknowledgement will be immediately followed by initial changes (wrapped for rea
 ```
 
 Streamed changes (wrapped for readability):
-```http
+```
 * /test?reliable&after=1456905830 {"Content-Type":"application/json",
     "Link":"</test?reliable&after=1456905843>; rel=changes"}
 {"time:change":"+10"}

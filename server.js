@@ -828,7 +828,7 @@ for(var e in wsEndpoints) {
 				var args = message.split(' ');
 
 				if(args.length < 2) {
-					ws.send('ERR * 400\nBad format.');
+					ws.send('ERROR * 400\nBad format.');
 					return;
 				}
 
@@ -836,12 +836,12 @@ for(var e in wsEndpoints) {
 				var uri = args[1];
 
 				if(uri.length == 0) {
-					ws.send('ERR * 400\nBad format.');
+					ws.send('ERROR * 400\nBad format.');
 					return;
 				}
 
 				if(method.length == 0) {
-					ws.send('ERR ' + uri + ' 400\nBad format.');
+					ws.send('ERROR ' + uri + ' 400\nBad format.');
 					return;
 				}
 
@@ -858,7 +858,7 @@ for(var e in wsEndpoints) {
 
 				if(allowed.indexOf(u.path) == -1) {
 					// not an allowed path
-					ws.send('ERR ' + uri + ' 400\nInvalid multi request path.');
+					ws.send('ERROR ' + uri + ' 400\nInvalid multi request path.');
 					return;
 				}
 
@@ -866,7 +866,7 @@ for(var e in wsEndpoints) {
 				if('after' in u.query) {
 					after = parseInt(u.query.after);
 					if(isNaN(after)) {
-						ws.send('ERR ' + uri + ' 400\nInvalid \'after\' value.');
+						ws.send('ERROR ' + uri + ' 400\nInvalid \'after\' value.');
 						return;
 					}
 				}
@@ -875,7 +875,7 @@ for(var e in wsEndpoints) {
 					for(var i = 0; i < l.paths.length; ++i) {
 						if(l.paths[i].path == u.path) {
 							// already listening
-							ws.send('ERR ' + uri + ' 400\nAlready listening.');
+							ws.send('ERROR ' + uri + ' 400\nAlready listening.');
 							return;
 						}
 					}
@@ -886,7 +886,7 @@ for(var e in wsEndpoints) {
 					} else if(u.path == '/test2') {
 						value = getTime2();
 					} else {
-						ws.send('ERR ' + uri + ' 404\nNot found');
+						ws.send('ERROR ' + uri + ' 404\nNot found');
 						return;
 					}
 
@@ -901,7 +901,7 @@ for(var e in wsEndpoints) {
 
 					if(type == 'changes' && reliable && after == null) {
 						// reliable changes requires after param
-						ws.send('ERR ' + uri + ' 400\nReliable changes stream requires \'after\' parameter.');
+						ws.send('ERROR ' + uri + ' 400\nReliable changes stream requires \'after\' parameter.');
 						return;
 					}
 
@@ -946,11 +946,11 @@ for(var e in wsEndpoints) {
 					}
 					if(!found) {
 						// wasn't listening
-						ws.send('ERR ' + uri + ' 400\nWasn\'t listening.');
+						ws.send('ERROR ' + uri + ' 400\nWasn\'t listening.');
 						return;
 					}
 				} else {
-					ws.send('ERR ' + uri + ' 405\nMethod not allowed.');
+					ws.send('ERROR ' + uri + ' 405\nMethod not allowed.');
 				}
 			});
 		});

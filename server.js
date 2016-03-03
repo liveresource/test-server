@@ -27,6 +27,7 @@ var listeners = [];
 //   multi: bool
 //   wait: int
 //   timeout: int
+//   noPrevious: bool
 var newListener = function (options) {
 	var l = {
 		req: options.req,
@@ -34,7 +35,8 @@ var newListener = function (options) {
 		ws: options.ws,
 		paths: options.paths,
 		stream: options.stream,
-		multi: options.multi
+		multi: options.multi,
+		noPrevious: options.noPrevious
 	};
 	listeners.push(l);
 	if(l.req) {
@@ -198,7 +200,7 @@ setInterval(function () {
 					'Content-Type': 'application/json',
 					'ETag': '"' + value + '"',
 				};
-				if(l.stream && !p.reliable) {
+				if(l.stream && !p.reliable && !l.noPrevious) {
 					meta['Previous-ETag'] = '"' + old + '"';
 				}
 				var valueStr = JSON.stringify({time: value});
@@ -360,6 +362,11 @@ var handler = function (value, req, res) {
 		reliable = true;
 	}
 
+	var noPrevious = false;
+	if('no_previous' in req.query) {
+		noPrevious = true;
+	}
+
 	var timeout = null;
 	if('timeout' in req.query) {
 		timeout = parseInt(req.query.timeout);
@@ -434,7 +441,8 @@ var handler = function (value, req, res) {
 			res: res,
 			paths: [{path: req.path, type: type, reliable: reliable}],
 			stream: true,
-			timeout: timeout
+			timeout: timeout,
+			noPrevious: noPrevious
 		});
 
 		res.set('Content-Type', 'text/event-stream');
@@ -793,6 +801,11 @@ for(var e in wsEndpoints) {
 
 			var parsed = url.parse(ws.upgradeReq.url, true);
 
+			var noPrevious = false;
+			if('no_previous' in parsed.query) {
+				noPrevious = true;
+			}
+
 			var timeout = null;
 			if('timeout' in parsed.query) {
 				timeout = parseInt(parsed.query.timeout);
@@ -807,7 +820,8 @@ for(var e in wsEndpoints) {
 				paths: [],
 				stream: true,
 				multi: true,
-				timeout: timeout
+				timeout: timeout,
+				noPrevious: noPrevious
 			});
 
 			ws.on('message', function (message) {

@@ -397,6 +397,11 @@ var handler = function (value, req, res) {
 			res.status(400).send('Invalid \'Last-Event-ID\' value.\n');
 			return;
 		}
+		if(lastEventId > value) {
+			// went back in time? tell the client to start over
+			res.status(404).end('Invalid \'Last-Event-ID\', start over.\n');
+			return;
+		}
 	}
 
 	var stream = false;
@@ -446,35 +451,34 @@ var handler = function (value, req, res) {
 		});
 
 		res.set('Content-Type', 'text/event-stream');
-		res.write('event: open\ndata:\n\n');
 
 		if(reliable) {
 			// write initial data
 			if(type == 'changes') {
-				if(value - after > 0) {
-					var links = [];
-					links.push('<' + req.path + '?reliable&after=' + value + '>; rel=changes-stream');
-					var meta = {
-						'Content-Type': 'application/json',
-						'Link': links.join(', ')
-					};
-					var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
-					res.write('event: update\n' +
-						'id: ' + value + '\n' +
-						'data: ' + JSON.stringify(meta) + '\n' +
-						'data: ' + valueStr + '\n\n');
-				}
+				var links = [];
+				links.push('<' + req.path + '?reliable&after=' + value + '>; rel=changes-stream');
+				var meta = {
+					'Content-Type': 'application/json',
+					'Link': links.join(', ')
+				};
+				var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
+				res.write('event: open\n' +
+					'id: ' + value + '\n' +
+					'data: ' + JSON.stringify(meta) + '\n' +
+					'data: ' + valueStr + '\n\n');
 			} else if(type == 'value') {
 				var meta = {
 					'Content-Type': 'application/json',
 					'ETag': '"' + value + '"'
 				};
 				var valueStr = JSON.stringify({time: value});
-				res.write('event: update\n' +
+				res.write('event: open\n' +
 					'id: ' + value + '\n' +
 					'data: ' + JSON.stringify(meta) + '\n' +
 					'data: ' + valueStr + '\n\n');
 			}
+		} else {
+			res.write('event: open\ndata:\n\n');
 		}
 
 		return;
@@ -916,16 +920,14 @@ for(var e in wsEndpoints) {
 					if(reliable) {
 						// write initial data
 						if(type == 'changes') {
-							if(value - after > 0) {
-								var links = [];
-								links.push('<' + u.path + '?reliable&after=' + value + '>; rel=changes');
-								var meta = {
-									'Content-Type': 'application/json',
-									'Link': links.join(', ')
-								};
-								var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
-								ws.send('* ' + uri + ' ' + JSON.stringify(meta) + '\n' + valueStr);
-							}
+							var links = [];
+							links.push('<' + u.path + '?reliable&after=' + value + '>; rel=changes');
+							var meta = {
+								'Content-Type': 'application/json',
+								'Link': links.join(', ')
+							};
+							var valueStr = JSON.stringify({'time:change': '+' + (value - after)});
+							ws.send('* ' + uri + ' ' + JSON.stringify(meta) + '\n' + valueStr);
 						} else if(type == 'value') {
 							var meta = {
 								'Content-Type': 'application/json',

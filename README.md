@@ -239,8 +239,132 @@ Content-Type: application/json
 
 ### Streaming
 
-TBD.
+The resources on the test server support streaming.
+
+Requesting value stream:
+```http
+GET /test HTTP/1.1
+Host: test.liveresource.org
+Accept: text/event-stream
+```
+
+Initial response:
+```http
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Transfer-Encoding: chunked
+
+event: open
+data:
+
+```
+
+Streamed value (wrapped for readability):
+```http
+event: update
+data: {"Content-Type":"application/json",
+       "ETag":"\"1456905843\"",
+       "Previous-ETag":"\"1456905833\""}
+data: {"time":1456905843}
+
+```
+
+If this were a changes stream instead of a value stream, updates would look like this (wrapped for readability):
+```http
+event: update
+data: {"Content-Type":"application/json",
+       "Link":"</test?after=1456905843>; rel=changes",
+       "Changes-Id":"1456905843",
+       "Previous-Changes-Id":"1456905833"}
+data: {"time:change":"+10"}
+
+```
+
+The `Previous-ETag` and `Previous-Changes-Id` fields inside the updates can be used to detect missing data. The client can recover value data by polling the resource normally. The client can recover changes data by polling the last received `changes` link.
+
+To test client behavior in the absence of `Previous-ETag`, set the `no_previous` query parameter in the request.
+
+### Reliable streaming
+
+The server supports reliable streaming. To use it, pass the `reliable` query parameter. This parameter will also cause the server to advertise links with `mode=reliable`.
+
+Querying for headers with reliability enabled:
+```http
+HEAD /test?reliable HTTP/1.1
+Host: test.liveresource.org
+```
+
+Response:
+```http
+HTTP/1.1 200 OK
+ETag: "1456905833"
+Link: </test?reliable>; rel=value-stream; mode=reliable
+Link: </test?reliable&after=1456905833>; rel=changes-stream; mode=reliable
+Content-Type: application/json
+```
+
+Requesting reliable value stream:
+```http
+GET /test?reliable HTTP/1.1
+Host: test.liveresource.org
+Accept: text/event-stream
+```
+
+Initial response (wrapped for readability):
+```http
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Transfer-Encoding: chunked
+
+event: open
+data: {"Content-Type":"application/json",
+       "ETag":"\"1456905833\""}
+data: {"time":1456905833}
+
+```
+
+Streamed value (wrapped for readability):
+```http
+event: update
+data: {"Content-Type":"application/json",
+       "ETag":"\"1456905843\""}
+data: {"time":1456905843}
+
+```
+
+Requesting reliable changes stream, from an older checkpoint:
+```http
+GET /test?reliable&after=1456905830 HTTP/1.1
+Host: test.liveresource.org
+Accept: text/event-stream
+```
+
+Initial response (wrapped for readability):
+```http
+HTTP/1.1 200 OK
+Content-Type: text/event-stream
+Transfer-Encoding: chunked
+
+event: open
+data: {"Content-Type":"application/json",
+       "Link":"</test?after=1456905833>; rel=changes"}
+data: {"time:change":"+3"}
+
+```
+
+Streamed changes (wrapped for readability):
+```http
+event: update
+data: {"Content-Type":"application/json",
+       "Link":"</test?after=1456905843>; rel=changes"}
+data: {"time:change":"+10"}
+
+```
 
 ### Socket
+
+TBD.
+
+### Reliable socket
 
 TBD.

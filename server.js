@@ -254,6 +254,14 @@ var applyCors = function (req, res, allowHeaders, exposeHeaders) {
 	}
 };
 
+var relString = function (typesList) {
+	if(typesList.length == 1) {
+		return typesList[0];
+	} else {
+		return '"' + typesList.join(' ') + '"';
+	}
+}
+
 var headerHandler = function (value, req, res) {
 	var etag = '"' + value + '"';
 	res.set('ETag', etag);
@@ -300,45 +308,79 @@ var headerHandler = function (value, req, res) {
 		noShareMultiplex = true;
 	}
 
-	var links = [];
-	if('changes' in relTypes) {
-		links.push('<' + req.path + '?after=' + value + '>; rel=changes');
-	}
+	var baseTypes = [];
+	var afterTypes = [];
+	var changesTypes = [];
+	var reliableBaseTypes = [];
+	var reliableAfterTypes = [];
+	var hintTypes = [];
+	var multiTypes = [];
+	var wsTypes = [];
+
 	if('value-wait' in relTypes) {
-		links.push('<' + req.path + '>; rel=value-wait');
-	}
-	if('changes-wait' in relTypes) {
-		links.push('<' + req.path + '?after=' + value + '>; rel=changes-wait');
+		baseTypes.push('value-wait');
 	}
 	if('value-stream' in relTypes) {
 		if(reliable) {
-			links.push('<' + req.path + '?reliable>; rel=value-stream; mode=reliable');
+			reliableBaseTypes.push('value-stream');
 		} else {
-			links.push('<' + req.path + '>; rel=value-stream');
+			baseTypes.push('value-stream');
 		}
+	}
+	if('changes' in relTypes) {
+		afterTypes.push('changes');
+	}
+	if('changes-wait' in relTypes) {
+		afterTypes.push('changes-wait');
 	}
 	if('changes-stream' in relTypes) {
 		if(reliable) {
-			links.push('<' + req.path + '?reliable&after=' + value + '>; rel=changes-stream; mode=reliable');
+			reliableAfterTypes.push('changes-stream');
 		} else {
-			links.push('<' + req.path + '?changes>; rel=changes-stream');
+			changesTypes.push('changes-stream');
 		}
 	}
 	if('hint-stream' in relTypes) {
-		links.push('<' + req.path + '?hints>; rel=hint-stream');
+		hintTypes.push('hint-stream');
 	}
 	if('multiplex-wait' in relTypes) {
-		if(noShareMultiplex) {
-			links.push('<' + req.path + '/multi>; rel=multiplex-wait');
-		} else {
-			links.push('</multi>; rel=multiplex-wait');
-		}
+		multiTypes.push('multiplex-wait');
 	}
 	if('multiplex-socket' in relTypes) {
+		wsTypes.push('multiplex-socket');
+	}
+
+	var links = [];
+	if(baseTypes.length > 0) {
+		links.push('<' + req.path + '>; rel=' + relString(baseTypes));
+	}
+	if(afterTypes.length > 0) {
+		links.push('<' + req.path + '?after=' + value + '>; rel=' + relString(afterTypes));
+	}
+	if(changesTypes.length > 0) {
+		links.push('<' + req.path + '?changes>; rel=' + relString(changesTypes));
+	}
+	if(reliableBaseTypes.length > 0) {
+		links.push('<' + req.path + '?reliable>; rel=' + relString(reliableBaseTypes) + '; mode=reliable');
+	}
+	if(reliableAfterTypes.length > 0) {
+		links.push('<' + req.path + '?reliable&after=' + value + '>; rel=' + relString(reliableAfterTypes) + '; mode=reliable');
+	}
+	if(hintTypes.length > 0) {
+		links.push('<' + req.path + '?hints>; rel=' + relString(hintTypes));
+	}
+	if(multiTypes.length > 0) {
 		if(noShareMultiplex) {
-			links.push('<' + req.path + '/ws>; rel=multiplex-socket');
+			links.push('<' + req.path + '/multi>; rel=' + relString(multiTypes));
 		} else {
-			links.push('</ws>; rel=multiplex-socket');
+			links.push('</multi>; rel=' + relString(multiTypes));
+		}
+	}
+	if(wsTypes.length > 0) {
+		if(noShareMultiplex) {
+			links.push('<' + req.path + '/ws>; rel=' + relString(wsTypes));
+		} else {
+			links.push('</ws>; rel=' + relString(wsTypes));
 		}
 	}
 

@@ -196,7 +196,7 @@ Uri: </test>; If-None-Match="1456905833", </test2&after=1456909433>
 Wait: 55
 ```
 
-*Note: While it ought to be legal in the LiveResource protocol to send multiple `Uri` headers, the test server requires all URIs to be included in a single `Uri` header, concatenated by commas. This is due to a limitation in Express.*
+*Note: While it ought to be legal in the LiveResource protocol to send multiple `Uri` headers, the test server requires all URIs to be concatenated into a single `Uri` header, separated by commas. This is due to a limitation in Express.*
 
 Response if neither resource changes in time:
 ```http
@@ -233,7 +233,7 @@ Content-Type: application/json
       "ETag": "\"1456905843\""
     },
     "body": "{\"time\": 1456905843}"
-  },
+  }
 }
 ```
 
